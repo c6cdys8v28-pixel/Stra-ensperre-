@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1677ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>StraßenKontrolle</title>
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,Arial,sans-serif;background:#f4f5f7}
+header{padding:calc(env(safe-area-inset-top) + 10px) 12px 9px;background:#fff;box-shadow:0 1px 5px #0002;position:relative;z-index:10}
+h1{font-size:20px;margin:0 0 8px}.row{display:flex;gap:7px}
+input,button{font:inherit;padding:10px;border-radius:10px;border:1px solid #d0d4da;background:#fff}
+input{flex:1;min-width:0}button{font-weight:600}.primary{background:#1677ff;color:#fff;border-color:#1677ff}
+#status{font-size:13px;color:#555;padding-top:7px}.hint{font-size:12px;color:#777;padding-top:4px}
+.bar{background:#fff;padding:7px 12px;display:flex;justify-content:space-between;font-size:14px}
+.badge{background:#e9edf2;border-radius:20px;padding:3px 8px}
+#map{height:calc(100vh - 168px);min-height:420px}.popup button{width:100%;margin-top:7px}
+</style>
+</head>
+<body>
+<header>
+<h1>🛑 StraßenKontrolle</h1>
+<div class="row"><input id="place" placeholder="Ort suchen, z. B. Dortmund"><button class="primary" id="search">Laden</button></div>
+<div id="status">Ort eingeben und „Laden“ drücken.</div>
+<div class="hint">Straße antippen → manuell als kontrolliert markieren.</div>
+</header>
+<div class="bar"><span><span class="badge" id="count">0 / 0</span> kontrolliert</span><button id="reset">Zurücksetzen</button></div>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map=L.map('map').setView([51.514,7.465],13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+{maxZoom:20,attribution:'© OpenStreetMap-Mitwirkende'}).addTo(map);
+let group=L.layerGroup().addTo(map),streets=[],placeKey='';
+const key=()=>`sc_${placeKey}_`;
+const done=id=>localStorage.getItem(key()+id)==='1';
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function update(){document.getElementById('count').textContent=`${streets.filter(s=>done(s.id)).length} / ${streets.length}`}
+function render(){
+ group.clearLayers();
+ streets.forEach(s=>{
+  const l=L.geoJSON(s.geometry,{style:{color:done(s.id)?'#20a35a':'#777',weight:done(s.id)?7:4,opacity:.9}});
+  l.bindPopup(`<div><b>${esc(s.name)}</b><br>${done(s.id)?'✅ Kontrolliert':'⬜ Noch offen'}
+  <button onclick="toggle('${s.id}')">${done(s.id)?'Als offen markieren':'Als kontrolliert markieren'}</button></div>`).addTo(group);
+ });
+ update();
+}
+window.toggle=id=>{done(id)?localStorage.removeItem(key()+id):localStorage.setItem(key()+id,'1');render();map.closePopup()};
+async function load(){
+ const q=document.getElementById('place').value.trim();if(!q)return;
+ const st=document.getElementById('status');st.textContent='Ort wird gesucht …';
+ try{
+  const a=await (await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q='+encodeURIComponent(q),
+  {headers:{'Accept-Language':'de'}})).json();
+  if(!a.length)throw Error('Ort nicht gefunden');
+  const p=a[0];
+  placeKey=(p.display_name||q).toLowerCase().replace(/[^a-z0-9äöüß]+/gi,'_').slice(0,100);
+  map.setView([+p.lat,+p.lon],14);st.textContent='Straßen werden geladen …';
+  const query=`[out:json][timeout:60];way["highway"]["name"](around:7000,${p.lat},${p.lon});out geom;`;
+  const data=await (await fetch('https://overpass-api.de/api/interpreter',{method:'POST',body:query})).json();
+  const m=new Map();
+  for(const e of data.elements||[]){
+   if(!e.geometry||!e.tags?.name)continue;
+   const n=e.tags.name.trim();
+   if(!m.has(n))m.set(n,{id:'n_'+btoa(unescape(encodeURIComponent(n))).replace(/[^A-Za-z0-9]/g,'').slice(0,70),
+     name:n,geometry:{type:'MultiLineString',coordinates:[]}});
+   m.get(n).geometry.coordinates.push(e.geometry.map(p=>[p.lon,p.lat]));
+  }
+  streets=[...m.values()].sort((a,b)=>a.name.localeCompare(b.name,'de'));
+  render();st.textContent=`${streets.length} Straßen geladen. Tippe eine Straße an.`;
+ }catch(e){st.textContent='Fehler: '+e.message}
+}
+document.getElementById('search').onclick=load;
+document.getElementById('place').onkeydown=e=>{if(e.key==='Enter')load()};
+document.getElementById('reset').onclick=()=>{
+ if(confirm('Alle Markierungen für diesen Ort löschen?')){
+  streets.forEach(s=>localStorage.removeItem(key()+s.id));render();
+ }
+};
+</script>
+</body></html>
